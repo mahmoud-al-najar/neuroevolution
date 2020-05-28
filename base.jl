@@ -1,5 +1,6 @@
 using StatsBase
 using Flux
+using Images
 
 
 FILTER_SPACE = [16, 32, 64, 128, 256, 512]
@@ -12,53 +13,74 @@ abstract type MBlockGene <: MGene end
 ########### Convolution ###########
 ###################################
 mutable struct MConv <: MGene
+    in_dims::Tuple
+    out_dims::Tuple
     kernel_size::Tuple
-    n_channels::Int64
     padding::Tuple
 end
 
-function MConv()
+function MConv(in_dims::Tuple)
+    out_dims = in_dims
+    out_channels = sample(FILTER_SPACE)
+    out_dims[3] = out_channels
     kernel_size = 3, 3
-    n_channels = sample(FILTER_SPACE)
     padding = 1, 1
-    MConv(kernel_size, n_channels, padding)
+    MConv(in_dims, out_dims, kernel_size, padding)
 end
 
-function get_phenotype(input_channels::Int64, layer::MConv)
-    return Conv(layer.kernel_size, input_channels=>layer.n_channels, pad=layer.padding)
+function MConv(in_dims::Tuple, out_dims::Tuple)
+    kernel_size = 3, 3
+    padding = 1, 1
+    MConv(in_dims, out_dims, kernel_size, padding)
+end
+
+function get_phenotype(prev_layer::MGene, cur_layer::MConv)
+    return Conv(cur_layer.kernel_size, prev_layer.out_dims[3]=>cur_layer.out_dims[3], pad=cur_layer.padding)
 end
 
 ###################################
 # Depthwise Separable Convolution #
 ###################################
 mutable struct MDepthwiseConv <: MGene
+    in_dims::Tuple
+    out_dims::Tuple
     kernel_size::Tuple
-    n_channels::Int64
     padding::Tuple
 end
 
-function MDepthwiseConv()
+function MDepthwiseConv(in_dims::Tuple)
+    out_dims = in_dims
+    out_channels = sample(FILTER_SPACE)
+    out_dims[3] = out_channels
     kernel_size = 3, 3
-    n_channels = sample(FILTER_SPACE)
     padding = 1, 1
-    MDepthwiseConv(kernel_size, n_channels, padding)
+    MDepthwiseConv(in_dims, out_dims, kernel_size, padding)
 end
 
-function get_phenotype(input_channels::Int64, layer::MDepthwiseConv)
-    return DepthwiseConv(layer.kernel_size, input_channels=>layer.n_channels, pad=layer.padding)
+function MDepthwiseConv(in_dims::Tuple, out_dims::Tuple)
+    kernel_size = 3, 3
+    padding = 1, 1
+    MDepthwiseConv(in_dims, out_dims, kernel_size, padding)
+end
+
+function get_phenotype(prev_layer::MGene, cur_layer::MDepthwiseConv)
+    return DepthwiseConv(cur_layer.kernel_size, prev_layer.out_dims[3]=>cur_layer.out_dims[3], pad=cur_layer.padding)
 end
 
 ###################################
 ####### Batch Normalization #######
 ###################################
 mutable struct MBatchNorm <: MGene 
-    MBatchNorm() = new()
+    in_dims::Tuple
+    out_dims::Tuple
 end
 
-# function MBatchNorm() end
+function MBatchNorm(in_dims::Tuple) 
+    MBatchNorm(in_dims, in_dims)
+end
 
-function get_phenotype(input_channels::Integer, layer::MBatchNorm)
-    return BatchNorm(input_channels)
+function get_phenotype(prev_layer::MGene, cur_layer::MBatchNorm)
+    return BatchNorm(cur_layer.out_dims[3])
 end
 
 ###################################
@@ -66,10 +88,15 @@ end
 ###################################
 
 mutable struct MReLU <: MGene 
-    MReLU() = new()
+    in_dims::Tuple
+    out_dims::Tuple
 end
 
-function get_phenotype(input_channels::Integer, layer::MReLU)
+function MReLU(in_dims::Tuple) 
+    MReLU(in_dims, in_dims)
+end
+
+function get_phenotype(prev_layer::MGene, cur_layer::MReLU)
     return x -> relu.(x)
 end
 
@@ -77,67 +104,47 @@ end
 ########### Max Pooling ###########
 ###################################
 mutable struct MMaxPool <: MGene
+    in_dims::Tuple
+    out_dims::Tuple
     kernel_size::Tuple
 end
 
-function MMaxPool()
+function MMaxPool(in_dims::Tuple)
+    out_dims = in_dims
+    out_dims[1] = in_dims[1] / 2
+    out_dims[2] = in_dims[2] / 2
     kernel_size = 2, 2
-    MMaxPool(kernel_size)
+    MMaxPool(in_dims, out_dims, kernel_size)
 end
 
-function get_phenotype(layer::MMaxPool)
-    return MaxPool(layer.kernel_size)
+function get_phenotype(prev_layer::MGene, cur_layer::MMaxPool)
+    return MaxPool(cur_layer.kernel_size)
 end
 
 ###################################
 ######### Skip Connection #########
 ###################################
 mutable struct MSkipConnection <: MGene
+    in_dims::Tuple
+    out_dims::Tuple
     type::String
 end
 
-function MSkipConnection()
-    type = sample(SKIP_CONNECTION_TYPES)
-    MSkipConnection(type)
+function MSkipConnection(in_dims::Tuple, out_dims::Tuple)
+    # type = sample(SKIP_CONNECTION_TYPES)
+    type = "concat"
+    MSkipConnection(in_dims, out_dims, type)
 end
 
-function get_phenotype(layer::MSkipConnection)
-    # TODO: implementation
-    ErrorException("No SkipConnections yet.")
-    return Nothing
-end
-
-########################################
-########################################
-#########      INDIVIDUAL      #########
-########################################
-########################################
-mutable struct Individual
-    genotype::Array{MGene}
-    fitness::Float64
-    model::Chain
-    Individual() = new()
-end
-
-function construct_model!(ind::Individual, input_channels::Int64, output_layer::Dense)
-    layers = []
-    last_output_channels = input_channels
-    for g in ind.genotype
-        if typeof(g) <: MBlockGene
-            ph = get_phenotype(last_output_channels, g)
-            last_output_channels = g.gene_conv.n_channels
-            for p in ph
-                push!(layers, p)
-            end      
-        else   
-            push!(layers, get_phenotype(last_output_channels, g))
-        end
+function get_phenotype(prev_layer::MGene, cur_layer::MSkipConnection, last_pheno)
+    
+    if cur_layer.type == "add"
+        return Nothing
+    elseif cur_layer.type == "concat"
+        # input_dims = 40, 40, 
+        # a = randn(Float32, 2, 2, 4, 1)
+        # b = padarray(a, Fill(0, (1, 1, 0, 0)))
+        return SkipConnection(last_pheno, (mx, x) -> cat(mx, x, dims=3))
     end
-
-    ### TODO: placeholder
-    ex_data = randn(Float32, 40, 40, 4, 1)
-    dense_in_size = size(Chain(layers..., x -> reshape(x, :, size(x, 4)))(ex_data))[1]
-    ###
-
-    ind.model = Chain(layers..., x -> reshape(x, :, size(x, 4)), Dense(dense_in_size, 1, relu; initb = ones))
 end
+
